@@ -12,6 +12,7 @@ import userRoutes from "./routes/userRoutes";
 import expenseRoutes from "./routes/expenseRoutes";
 import purchaseRoutes from "./routes/purchaseRoutes";
 import "../cron/salesSummaryCron"
+import "../helpers/init_redis"
 
 /* CONFIGURATIONS */
 dotenv.config();

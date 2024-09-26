@@ -12,66 +12,106 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.login = exports.register = void 0;
-const bcryptjs_1 = __importDefault(require("bcryptjs"));
+exports.logout = exports.refreshToken = exports.login = exports.register = void 0;
+const http_errors_1 = __importDefault(require("http-errors"));
+const jwt_helper_1 = require("../../helpers/jwt_helper");
 const client_1 = require("@prisma/client");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const validationShema_1 = require("../../helpers/validationShema");
-const signAccessToken_1 = require("../../helpers/signAccessToken");
 const prisma = new client_1.PrismaClient();
-// User Registration
-const register = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { name, email, password } = req.body;
+const register = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // Validate request body using authSchema
-        yield validationShema_1.authSchema.validate(req.body);
-        // Check if the user already exists
-        const existingUser = yield prisma.users.findUnique({ where: { email } });
-        if (existingUser) {
-            return res.status(400).json({ message: 'User already exists' });
+        const result = yield validationShema_1.authSchema.validate(req.body);
+        // Check if user already exists
+        const doesExist = yield prisma.users.findUnique({
+            where: { email: result.email },
+        });
+        if (doesExist) {
+            throw http_errors_1.default.Conflict(`${result.email} is already registered`);
         }
-        // Hash the password
-        const hashedPassword = yield bcryptjs_1.default.hash(password, 10);
-        // Create the new user
-        const newUser = yield prisma.users.create({
+        // Hash the password before saving
+        const hashedPassword = yield bcryptjs_1.default.hash(result.password, 10);
+        const user = yield prisma.users.create({
             data: {
-                name,
-                email,
+                name: result.name,
+                email: result.email,
                 password: hashedPassword,
             },
         });
-        // Sign JWT token
-        const token = (0, signAccessToken_1.signAccessToken)(newUser.userId);
-        return res.status(201).json({ message: 'User registered', token });
+        const accessToken = yield (0, jwt_helper_1.signAccessToken)(user.userId);
+        const refreshToken = yield (0, jwt_helper_1.signRefreshToken)(user.userId);
+        res.send({ accessToken, refreshToken });
     }
     catch (error) {
-        return res.status(500).json({ message: error.message });
+        // if (error.isJoi === true) error.status = 422;
+        next(error);
     }
 });
 exports.register = register;
-// User Login
-const login = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { email, password } = req.body;
+const login = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // Validate request body using signInSchema
-        yield validationShema_1.signInSchema.validate(req.body);
+        const result = yield validationShema_1.authSchema.validate(req.body);
         // Find user by email
-        const user = yield prisma.users.findUnique({ where: { email } });
-        if (!user) {
-            return res.status(400).json({ message: 'Invalid email or password' });
+        const user = yield prisma.users.findUnique({
+            where: { email: result.email },
+        });
+        // If user not found
+        if (!user)
+            throw new Error('incorrect email');
+        // Validate if the user password is not null before comparison
+        if (!user.password) {
+            throw new Error('input password');
         }
-        if (user.password) {
-            // Compare passwords
-            const isPasswordValid = yield bcryptjs_1.default.compare(password, user.password);
-            if (!isPasswordValid) {
-                return res.status(400).json({ message: 'Invalid email or password' });
-            }
+        // Validate password
+        const isMatch = bcryptjs_1.default.compare(result.password, user.password);
+        if (!isMatch) {
+            throw http_errors_1.default.Unauthorized('Username/password not valid');
         }
-        // Sign JWT token
-        const token = (0, signAccessToken_1.signAccessToken)(user.userId);
-        return res.status(200).json({ message: 'Login successful', token });
+        const accessToken = yield (0, jwt_helper_1.signAccessToken)(user.userId);
+        const refreshToken = yield (0, jwt_helper_1.signRefreshToken)(user.userId);
+        res.send({ accessToken, refreshToken });
     }
     catch (error) {
-        return res.status(500).json({ message: error.message });
+        // if (error.isJoi === true) {
+        //   return next(createError.BadRequest('Invalid Username/Password'));
+        // }
+        next(error);
     }
 });
 exports.login = login;
+const refreshToken = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { refreshToken } = req.body;
+        if (!refreshToken)
+            throw http_errors_1.default.BadRequest();
+        const userId = yield (0, jwt_helper_1.verifyRefreshToken)(refreshToken);
+        const accessToken = yield (0, jwt_helper_1.signAccessToken)(userId);
+        const newRefreshToken = yield (0, jwt_helper_1.signRefreshToken)(userId);
+        res.send({ accessToken, refreshToken: newRefreshToken });
+    }
+    catch (error) {
+        next(error);
+    }
+});
+exports.refreshToken = refreshToken;
+const logout = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { refreshToken } = req.body;
+        if (!refreshToken)
+            throw http_errors_1.default.BadRequest();
+        const userId = yield (0, jwt_helper_1.verifyRefreshToken)(refreshToken);
+        // Delete the refresh token from Redis
+        // client.DEL(userId, (err, val) => {
+        //   if (err) {
+        //     console.log(err.message);
+        //     throw createError.InternalServerError();
+        //   }
+        //   console.log(val);
+        //   res.sendStatus(204);
+        // });
+    }
+    catch (error) {
+        next(error);
+    }
+});
+exports.logout = logout;
